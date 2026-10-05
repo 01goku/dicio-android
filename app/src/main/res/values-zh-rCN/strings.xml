@@ -275,4 +275,7 @@
     <string name="about_contributing_description">Dicio 由全球志愿者开发。您可以贡献代码改进、翻译和助手新技能来帮忙！</string>
     <string name="about_privacy_title">隐私政策</string>
     <string name="about_privacy_description">Dicio 只在技能预期到连接外部服务时或者在设置期间下载机器学习模型时才会外联。所有语音处理均在设备本地执行，多数技能可以断网使用。</string>
+    <string name="about_wiki_title">文档</string>
+    <string name="about_wiki_description">查找一般信息、配置指南、故障排除提示及更多内容？请查看我们的 wiki！</string>
+    <string name="about_wiki_link">https://dicio.stypox.org/</string>
 </resources>

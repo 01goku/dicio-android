@@ -5,7 +5,7 @@
     <string name="vosk_model_extraction_error">Vosk-Modell konnte nicht aus dem Zip-Archiv entpackt werden</string>
     <string name="vosk_model_downloading">Lade Vosk-Modell herunter…</string>
     <string name="text_input_hint">Frag mich irgendetwas…</string>
-    <string name="eval_no_match">Ich habe nicht verstanden</string>
+    <string name="eval_no_match">Ich habe ea nicht verstanden</string>
     <string name="skill_calculator_could_not_calculate">Die gewünschte Berechnung konnte nicht durchgeführt werden</string>
     <string name="skill_open_opening">Öffne %1$s…</string>
     <string name="skill_open_unknown_app">Unbekannte Anwendung %1$s</string>
@@ -35,7 +35,7 @@
     <string name="pref_speech_output_method_nothing">Nichts</string>
     <string name="pref_speech_output_method_snackbar">Benachrichtigungsfeld unten</string>
     <string name="pref_speech_output_method_toast">Benachrichtigung</string>
-    <string name="pref_speech_output_method_android">Android TTS-Engine</string>
+    <string name="pref_speech_output_method_android">Android-Sprachausgabe</string>
     <string name="pref_speech_output_method_summary">Wähle den Dienst den Dicio verwenden soll, um zu dir zu sprechen</string>
     <string name="pref_speech_output_method">Sprachausgabemethode</string>
     <string name="pref_input_method_vosk">Vosk Offline-Spracherkennung</string>
@@ -79,7 +79,7 @@
     <string name="skill_telephone_unknown_contact">Es wurde kein passender Kontakt gefunden, bitte versuche es noch einmal</string>
     <string name="skill_telephone_found_contacts">Ich habe %1$d Kontakte gefunden, welchen davon soll ich anrufen\?</string>
     <string name="eval_missing_permissions">Die Fähigkeit \"%1$s\" benötigt zum Funktionieren diese Genehmigungen: %2$s</string>
-    <string name="android_tts_error">Während des Starts der Android-TTS-Engine ist ein Fehler aufgetreten</string>
+    <string name="android_tts_error">Fehler beim Initialisieren der Android-Sprachausgabe</string>
     <string name="pref_skill_missing_permissions">Folgende Genehmigungen werden benötigt: %1$s</string>
     <string name="pref_skill_grant_permissions">Zulassen</string>
     <string name="skill_timer_query">Der Timer läuft in %1$s ab</string>
@@ -151,7 +151,7 @@
     <string name="skill_open_could_not_understand">Ich konnte die App nicht verstehen</string>
     <string name="back">Zurück</string>
     <string name="clear">Löschen</string>
-    <string name="copy_to_clipboard">In Zwischenablage kopieren</string>
+    <string name="copy_to_clipboard">In die Zwischenablage kopieren</string>
     <string name="done">Fertig</string>
     <string name="grant_microphone_permission">Mikrofon-Berechtigung erteilen</string>
     <string name="error_loading">Fehler beim Laden</string>
@@ -201,7 +201,7 @@
     <string name="skill_media_next">Nächste Medien…</string>
     <string name="skill_media_no_media_session">Kein Mediaplayer ist aktiv</string>
     <string name="skill_search_no_results_stop">Die Suche ergab kein Ergebnis</string>
-    <string name="eval_no_match_repeat">Kannst du das bitte wiederholen?</string>
+    <string name="eval_no_match_repeat">Kannst du bitte wiederholen?</string>
     <string name="pref_weather_temperature_unit_celsius">Celsius (°C)</string>
     <string name="pref_weather_temperature_unit_kelvin">Kelvin (K)</string>
     <string name="pref_weather_length_unit">Längeneinheit</string>
@@ -222,9 +222,9 @@
     <string name="pref_input_method_external_popup">Externes Sprache-zu-Text-Popup</string>
     <string name="pref_wake_custom_delete">Benutzerdefiniertes Weckwort löschen</string>
     <string name="pref_wake_custom_delete_summary">Rückkehr zum Standard-Weckwort „Hey Dicio“</string>
-    <string name="wake_custom_service_foreground_notification">Lausche auf benutzerdefiniertes Aktivierungswort</string>
+    <string name="wake_custom_service_foreground_notification">Warten auf benutzerdefiniertes Aktivierungswort</string>
     <string name="skill_weather_meters_per_second">m/s</string>
-    <string name="skill_weather_miles_per_hour">mph</string>
+    <string name="skill_weather_miles_per_hour">Meilen pro Stunde</string>
     <string name="skill_listening_started_listening">OK, Ich achte auf das Aktivierungswort</string>
     <string name="skill_listening_not_listening">Ich habe nicht zugehört</string>
     <string name="skill_listening_stop_listening">OK</string>
