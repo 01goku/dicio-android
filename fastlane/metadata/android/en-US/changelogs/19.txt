@@ -4,7 +4,7 @@ New
 • Added a link to our (new) documentation in the about page
 
 Improved
-• Translations for Kabyle
+• Update translations
 
 Fixed
 • Crash when trying to use the Calculator Skill
