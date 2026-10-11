@@ -1,5 +1,7 @@
 name: Build and create release
 on: workflow_dispatch
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -95,7 +97,7 @@ jobs:
         # if the release exists and is a draft, or the release does not exists,
         # proceed with uploading/overwriting artifacts
         if: ${{ (steps.get_release.outputs.draft == 'true') || (steps.get_release.outputs.draft == '') }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ env.VERSION }}
           name: v${{ env.VERSION }}
