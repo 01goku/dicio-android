@@ -44,8 +44,20 @@ android {
         }
     }
 
+    signingConfigs {
+        // Personal fork: a fixed debug key, so APKs built on fresh CI runners can be installed
+        // over each other with `adb install -r` (the default debug key is regenerated per runner).
+        getByName("debug") {
+            storeFile = file("ethereal-debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         debug {
+            signingConfig = signingConfigs.getByName("debug")
             var normalizedGitBranch = gitBranch().replaceFirst("^[^A-Za-z]+", "").replace(Regex("[^0-9A-Za-z]+"), "")
             applicationIdSuffix = ".$normalizedGitBranch"
             versionNameSuffix = "-$normalizedGitBranch"
