@@ -208,9 +208,19 @@ class WakeService : Service() {
                 ar.read(audio, 0, audio.size)
 
                 val wakeWordDetected = wakeDevice.processFrame(audio)
+                if (!wakeWordDetected) {
+                    EtherealClient.updateAmbient(audio)
+                }
                 if (wakeWordDetected && Instant.now() > nextWakeWordAllowed) {
-                    nextWakeWordAllowed = Instant.now().plusMillis(WAKE_WORD_BACKOFF_MILLIS)
-                    onWakeWordDetected()
+                    if (EtherealClient.ENABLED) {
+                        // Ethereal fork: record -> PC endpoint -> play reply, all in this thread
+                        Log.d(TAG, "Wake word detected (Ethereal mode)")
+                        EtherealClient.handleWake(this, ar, wakeDevice.frameSize())
+                        nextWakeWordAllowed = Instant.now().plusMillis(ETHEREAL_REARM_MILLIS)
+                    } else {
+                        nextWakeWordAllowed = Instant.now().plusMillis(WAKE_WORD_BACKOFF_MILLIS)
+                        onWakeWordDetected()
+                    }
                 }
 
                 lastHeard.set(Instant.now())
@@ -364,6 +374,7 @@ class WakeService : Service() {
         private const val START_NOTIFICATION_ID = 48019274
         private const val TRIGGERED_NOTIFICATION_ID = 601398647
         private const val WAKE_WORD_BACKOFF_MILLIS = 4000L
+        private const val ETHEREAL_REARM_MILLIS = 2000L
         private const val ACTION_STOP_WAKE_SERVICE =
             "org.stypox.dicio.io.wake.WakeService.ACTION_STOP"
         private const val RELEASE_STT_RESOURCES_MILLIS = 1000L * 60 * 5 // 5 minutes

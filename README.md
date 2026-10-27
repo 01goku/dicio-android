@@ -1,3 +1,5 @@
+> **Personal fork (Ethereal companion).** This is a personal, unofficial fork of [Stypox/dicio-android](https://github.com/Stypox/dicio-android), licensed GPL-3.0 like upstream. On the `ethereal` branch, the wake word no longer opens Dicio's on-device skills: after the wake word the app records the utterance, POSTs it as 16 kHz mono WAV to a private voice endpoint on the owner's PC over Tailscale, and plays back the spoken reply (see `app/src/main/kotlin/org/stypox/dicio/io/wake/EtherealClient.kt`). Not intended for general use; please use upstream Dicio.
+
 # Dicio assistant
 
 Dicio is a *free and open source* **voice assistant** running on Android. It supports many different **skills** and input/output methods, and it provides both **speech** and **graphical** feedback to a question. It interprets user input and (when possible) generates user output entirely **on-device**, providing privacy by design. It has **multilanguage** support, and is currently available in these languages: Czech, Dutch, English, French, German, Greek, Italian, Polish, Russian, Slovenian, Spanish, Swedish, Turkish and Ukrainian. Open to contributions :-D
