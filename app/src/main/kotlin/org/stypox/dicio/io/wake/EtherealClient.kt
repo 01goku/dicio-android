@@ -4,19 +4,24 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioTrack
 import android.media.MediaPlayer
 import android.media.ToneGenerator
 import android.os.Build
 import android.util.Log
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
+import java.io.DataInputStream
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 import kotlin.math.sqrt
@@ -25,6 +30,12 @@ import kotlin.math.sqrt
  * Ethereal personal-fork behavior: after the wake word, record the utterance, POST it to the
  * Ethereal PC endpoint (over Tailscale) and play back the spoken answer. Replaces Dicio's
  * on-device STT + skills when [ENABLED] is true.
+ *
+ * The reply is streamed (`?stream=1`): the server sends one length-prefixed PCM frame per spoken
+ * sentence as soon as it is rendered (4-byte big-endian length, then 16-bit LE mono PCM at the
+ * `X-Ethereal-Sample-Rate` rate; a 0-length frame ends the reply), and they are played back to
+ * back through one AudioTrack while later sentences are still being generated. If the streaming
+ * request fails before any audio arrives, the old single-WAV request is used instead.
  *
  * Config (optional) is read from `<filesDir>/ethereal.json`:
  *   {"url": "http://100.80.39.83:8790/v1/turn", "token": "..."}
@@ -89,8 +100,22 @@ object EtherealClient {
                 return
             }
             tones?.startTone(ToneGenerator.TONE_PROP_ACK, 150)
+            val cfg = loadConfig(context)
+            val streamed = try {
+                streamAndPlay(context, cfg, pcm)
+            } catch (e: Exception) {
+                Log.e(TAG, "Ethereal stream failed", e)
+                StreamResult.FAILED
+            }
+            if (streamed == StreamResult.PLAYED) return
+            if (streamed == StreamResult.EMPTY) {
+                tones?.startTone(ToneGenerator.TONE_SUP_ERROR, 600)
+                Thread.sleep(700)
+                return
+            }
+            Log.w(TAG, "falling back to the non-streaming endpoint")
             val reply = try {
-                send(loadConfig(context), pcm)
+                send(cfg, pcm)
             } catch (e: Exception) {
                 Log.e(TAG, "Ethereal request failed", e)
                 null
@@ -173,6 +198,144 @@ object EtherealClient {
             return buf.toByteArray()
         } finally {
             conn.disconnect()
+        }
+    }
+
+    private enum class StreamResult { PLAYED, EMPTY, FAILED }
+
+    /** Marker queued by the reader thread: end of stream (clean or not). */
+    private val END_OF_STREAM = ByteArray(0)
+
+    /**
+     * POSTs to the streaming endpoint and plays frames as they arrive. Returns PLAYED once any
+     * audio was played (even if the stream broke later), EMPTY if the server answered but sent
+     * no audio, and FAILED (or throws) if nothing usable arrived, so the caller can fall back.
+     */
+    private fun streamAndPlay(context: Context, cfg: Config, pcm: ShortArray): StreamResult {
+        val sep = if (cfg.url.contains("?")) "&" else "?"
+        val conn = URL("${cfg.url}${sep}device=phone&stream=1").openConnection() as HttpURLConnection
+        val t0 = System.currentTimeMillis()
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 5000
+            conn.readTimeout = 120_000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "audio/wav")
+            if (cfg.token.isNotEmpty()) conn.setRequestProperty("Authorization", "Bearer ${cfg.token}")
+            val body = wav(pcm)
+            conn.setFixedLengthStreamingMode(body.size)
+            conn.outputStream.use { it.write(body) }
+            val code = conn.responseCode
+            if (code != 200) {
+                Log.e(TAG, "Ethereal stream endpoint returned HTTP $code")
+                return StreamResult.FAILED
+            }
+            val ctype = conn.contentType ?: ""
+            if (!ctype.startsWith("application/x-ethereal-pcm")) {
+                // older server that ignores stream=1: it answered with the whole WAV
+                val buf = ByteArrayOutputStream()
+                conn.inputStream.use { it.copyTo(buf) }
+                if (buf.size() < 64) return StreamResult.EMPTY
+                play(context, buf.toByteArray())
+                return StreamResult.PLAYED
+            }
+            val sampleRate = conn.getHeaderField("X-Ethereal-Sample-Rate")?.toIntOrNull() ?: 24000
+
+            // Network reads run on their own thread so a frame that arrives while the previous
+            // one is still playing is already buffered when the AudioTrack needs it.
+            val frames = LinkedBlockingQueue<ByteArray>()
+            val input = DataInputStream(BufferedInputStream(conn.inputStream, 64 * 1024))
+            val reader = Thread {
+                try {
+                    while (true) {
+                        val n = input.readInt()
+                        if (n <= 0 || n > 50_000_000) break
+                        val frame = ByteArray(n)
+                        input.readFully(frame)
+                        frames.put(frame)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "stream read ended early", e)
+                } finally {
+                    frames.put(END_OF_STREAM)
+                }
+            }
+            reader.isDaemon = true
+            reader.start()
+
+            var track: AudioTrack? = null
+            var bufFrames = 0
+            var framesWritten = 0L
+            try {
+                while (true) {
+                    val frame = frames.poll(125, TimeUnit.SECONDS) ?: break
+                    if (frame === END_OF_STREAM) break
+                    if (track == null) {
+                        Log.i(TAG, "first audio after ${System.currentTimeMillis() - t0} ms")
+                        bufFrames = trackBufferBytes(sampleRate) / 2
+                        track = newTrack(sampleRate, bufFrames * 2)
+                        track.play()
+                    }
+                    var off = 0
+                    while (off < frame.size) {
+                        val w = track.write(frame, off, frame.size - off)
+                        if (w <= 0) throw IllegalStateException("AudioTrack.write returned $w")
+                        off += w
+                    }
+                    framesWritten += frame.size / 2
+                }
+                if (track == null) return StreamResult.EMPTY
+                drain(track, sampleRate, bufFrames, framesWritten)
+                Log.i(TAG, "stream done after ${System.currentTimeMillis() - t0} ms, " +
+                    "${framesWritten * 1000 / sampleRate} ms of audio")
+                return StreamResult.PLAYED
+            } finally {
+                track?.let {
+                    try { it.stop() } catch (_: Exception) {}
+                    it.release()
+                }
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    private fun trackBufferBytes(sampleRate: Int): Int {
+        val minBuf = AudioTrack.getMinBufferSize(
+            sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        // keep it small: a streaming AudioTrack only starts playing once its buffer is full
+        return max(minBuf * 2, sampleRate / 10 * 2)
+    }
+
+    private fun newTrack(sampleRate: Int, bufBytes: Int): AudioTrack {
+        return AudioTrack(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build(),
+            AudioFormat.Builder()
+                .setSampleRate(sampleRate)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .build(),
+            bufBytes,
+            AudioTrack.MODE_STREAM,
+            AudioManager.AUDIO_SESSION_ID_GENERATE,
+        )
+    }
+
+    /**
+     * Pushes the tail of the reply out of the AudioTrack buffer with silence, then waits until
+     * the playback head has passed the last real sample (so focus is not released mid-word).
+     */
+    private fun drain(track: AudioTrack, sampleRate: Int, bufFrames: Int, framesWritten: Long) {
+        val pad = ByteArray((bufFrames + sampleRate / 4) * 2)
+        track.write(pad, 0, pad.size)
+        val deadline = System.currentTimeMillis() + framesWritten * 1000 / sampleRate + 3000
+        while (System.currentTimeMillis() < deadline) {
+            val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+            if (head >= framesWritten) break
+            Thread.sleep(50)
         }
     }
 
