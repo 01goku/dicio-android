@@ -48,6 +48,9 @@ class WakeService : Service() {
 
     private val listening = AtomicBoolean(false)
 
+    /** Set by the assist gesture; the wake loop runs an Ethereal turn on its next frame. */
+    private val assistRequested = AtomicBoolean(false)
+
     @Inject
     lateinit var skillEvaluator: SkillEvaluator
     @Inject
@@ -90,6 +93,12 @@ class WakeService : Service() {
             return START_NOT_STICKY
         }
 
+        val etherealTurn = intent?.action == ACTION_ETHEREAL_TURN
+        if (etherealTurn) {
+            Log.d(TAG, "Ethereal turn requested by the assist gesture")
+            assistRequested.set(true)
+        }
+
         try {
             createForegroundNotification(wakeDevice.isHeyDicio.value)
         } catch (t: Throwable) {
@@ -111,6 +120,19 @@ class WakeService : Service() {
             WakeState.Loading,
             WakeState.Loaded -> {}
             else -> {
+                listening.set(false)
+                if (etherealTurn) {
+                    // no wake-word loop to piggyback on: run the turn with a mic of its own
+                    assistRequested.set(false)
+                    scope.launch {
+                        try {
+                            EtherealClient.runStandaloneTurn(this@WakeService)
+                        } finally {
+                            if (!listening.get()) stopWithMessage()
+                        }
+                    }
+                    return START_NOT_STICKY
+                }
                 stopWithMessage("Could not start WakeService: wake word device not ready")
                 return START_NOT_STICKY
             }
@@ -206,6 +228,16 @@ class WakeService : Service() {
                 }
 
                 ar.read(audio, 0, audio.size)
+
+                if (assistRequested.getAndSet(false) && EtherealClient.ENABLED) {
+                    Log.d(TAG, "Assist gesture (Ethereal mode)")
+                    EtherealClient.handleWake(this, ar, wakeDevice.frameSize())
+                    // presses that arrived while the turn was running are dropped
+                    assistRequested.set(false)
+                    nextWakeWordAllowed = Instant.now().plusMillis(ETHEREAL_REARM_MILLIS)
+                    lastHeard.set(Instant.now())
+                    continue
+                }
 
                 val wakeWordDetected = wakeDevice.processFrame(audio)
                 if (!wakeWordDetected) {
@@ -338,6 +370,17 @@ class WakeService : Service() {
             ContextCompat.startForegroundService(context, intent)
         }
 
+        /**
+         * Runs one Ethereal turn (beep, record, PC reply), as if the wake word had been heard.
+         * Call from a foreground part of the app (the assist activity), since this may need to
+         * start the microphone foreground service.
+         */
+        fun requestEtherealTurn(context: Context) {
+            val intent = Intent(context, WakeService::class.java)
+                .apply { action = ACTION_ETHEREAL_TURN }
+            ContextCompat.startForegroundService(context, intent)
+        }
+
         fun stop(context: Context) {
             try {
                 context.startService(Intent(context, WakeService::class.java)
@@ -377,6 +420,8 @@ class WakeService : Service() {
         private const val ETHEREAL_REARM_MILLIS = 2000L
         private const val ACTION_STOP_WAKE_SERVICE =
             "org.stypox.dicio.io.wake.WakeService.ACTION_STOP"
+        private const val ACTION_ETHEREAL_TURN =
+            "org.stypox.dicio.io.wake.WakeService.ACTION_ETHEREAL_TURN"
         private const val RELEASE_STT_RESOURCES_MILLIS = 1000L * 60 * 5 // 5 minutes
     }
 }

@@ -1,5 +1,6 @@
 package org.stypox.dicio.io.wake
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -8,6 +9,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaPlayer
+import android.media.MediaRecorder
 import android.media.ToneGenerator
 import android.os.Build
 import android.util.Log
@@ -23,6 +25,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -38,8 +41,12 @@ import kotlin.math.sqrt
  * request fails before any audio arrives, the old single-WAV request is used instead.
  *
  * Config (optional) is read from `<filesDir>/ethereal.json`:
- *   {"url": "http://100.80.39.83:8790/v1/turn", "token": "..."}
- * It can be written without opening the app (debug build) via `adb shell run-as <pkg>`.
+ *   {"url": "http://100.80.39.83:8790/v1/turn", "token": "...", "stream": true}
+ * It is edited from the "Ethereal" section of the settings screen, and can also be written
+ * without opening the app (debug build) via `adb shell run-as <pkg>`.
+ *
+ * A turn starts either from the wake word ([handleWake], on the wake loop thread) or from the
+ * assist gesture (EtherealAssistActivity -> [WakeService.requestEtherealTurn]).
  */
 object EtherealClient {
     const val ENABLED = true
@@ -51,6 +58,7 @@ object EtherealClient {
     private const val END_SILENCE_MS = 1100
     private const val MAX_UTTERANCE_MS = 15000
     private const val MIN_THRESHOLD = 350.0
+    private const val STANDALONE_FRAME = 1280 // 80 ms at 16 kHz, like the wake-word frames
 
     /** Rolling ambient RMS, updated by the wake loop, used to pick the speech threshold. */
     @Volatile
@@ -67,17 +75,115 @@ object EtherealClient {
         return sqrt(sum / frame.size)
     }
 
-    private data class Config(val url: String, val token: String)
+    data class Config(val url: String, val token: String, val stream: Boolean = true)
 
-    private fun loadConfig(context: Context): Config {
-        val f = File(context.filesDir, "ethereal.json")
+    private fun configFile(context: Context) = File(context.filesDir, "ethereal.json")
+
+    fun loadConfig(context: Context): Config {
+        val f = configFile(context)
         if (!f.exists()) return Config(DEFAULT_URL, "")
         return try {
             val j = JSONObject(f.readText())
-            Config(j.optString("url", DEFAULT_URL).ifBlank { DEFAULT_URL }, j.optString("token", ""))
+            Config(
+                j.optString("url", DEFAULT_URL).ifBlank { DEFAULT_URL },
+                j.optString("token", ""),
+                j.optBoolean("stream", true),
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "bad ethereal.json, using defaults", e)
+            Log.e(TAG, "bad ethereal.json, using defaults")
             Config(DEFAULT_URL, "")
+        }
+    }
+
+    /** Writes the config, keeping any other keys already present in ethereal.json. */
+    fun saveConfig(context: Context, cfg: Config) {
+        val f = configFile(context)
+        val j = try {
+            if (f.exists()) JSONObject(f.readText()) else JSONObject()
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        j.put("url", cfg.url.trim().ifBlank { DEFAULT_URL })
+        j.put("token", cfg.token.trim())
+        j.put("stream", cfg.stream)
+        val tmp = File(f.parentFile, f.name + ".tmp")
+        tmp.writeText(j.toString(2))
+        if (!tmp.renameTo(f)) {
+            f.writeText(j.toString(2))
+            tmp.delete()
+        }
+    }
+
+    /**
+     * Calls the token-protected `GET /v1/health` on the same host:port as [url] and returns a
+     * short human-readable result (never containing the token). Blocking: call off the main thread.
+     */
+    fun testConnection(url: String, token: String): String {
+        val t0 = System.currentTimeMillis()
+        return try {
+            val base = URL(url.trim().ifBlank { DEFAULT_URL })
+            val health = URL(base.protocol, base.host, base.port, "/v1/health")
+            val conn = health.openConnection() as HttpURLConnection
+            try {
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 4000
+                conn.readTimeout = 4000
+                if (token.isNotBlank()) {
+                    conn.setRequestProperty("Authorization", "Bearer ${token.trim()}")
+                }
+                val code = conn.responseCode
+                val ms = System.currentTimeMillis() - t0
+                when (code) {
+                    200 -> {
+                        val body = conn.inputStream.use { it.readBytes().decodeToString() }
+                        val busy = try {
+                            JSONObject(body).optBoolean("busy")
+                        } catch (_: Exception) {
+                            false
+                        }
+                        "Connected ($ms ms)" + (if (busy) ", server busy with a turn" else "")
+                    }
+                    401 -> "Server reached, but the token was rejected (401)"
+                    404 -> "Server reached, but it has no /v1/health (404)"
+                    else -> "Server answered HTTP $code"
+                }
+            } finally {
+                conn.disconnect()
+            }
+        } catch (e: Exception) {
+            "Failed: ${e.javaClass.simpleName}" + (e.message?.let { ": $it" } ?: "")
+        }
+    }
+
+    private val standaloneBusy = AtomicBoolean(false)
+
+    /**
+     * Runs one turn with a microphone of its own, for when the wake-word loop is not running
+     * (e.g. the wake word is disabled). Blocking.
+     */
+    @SuppressLint("MissingPermission")
+    fun runStandaloneTurn(context: Context) {
+        if (!standaloneBusy.compareAndSet(false, true)) return
+        var ar: AudioRecord? = null
+        try {
+            ar = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                max(6400, AudioRecord.getMinBufferSize(
+                    SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)),
+            )
+            ar.startRecording()
+            handleWake(context, ar, STANDALONE_FRAME)
+        } catch (e: Exception) {
+            Log.e(TAG, "standalone turn failed", e)
+        } finally {
+            ar?.let {
+                try { it.stop() } catch (_: Exception) {}
+                it.release()
+            }
+            standaloneBusy.set(false)
         }
     }
 
@@ -101,7 +207,7 @@ object EtherealClient {
             }
             tones?.startTone(ToneGenerator.TONE_PROP_ACK, 150)
             val cfg = loadConfig(context)
-            val streamed = try {
+            val streamed = if (!cfg.stream) StreamResult.FAILED else try {
                 streamAndPlay(context, cfg, pcm)
             } catch (e: Exception) {
                 Log.e(TAG, "Ethereal stream failed", e)
@@ -113,7 +219,7 @@ object EtherealClient {
                 Thread.sleep(700)
                 return
             }
-            Log.w(TAG, "falling back to the non-streaming endpoint")
+            if (cfg.stream) Log.w(TAG, "falling back to the non-streaming endpoint")
             val reply = try {
                 send(cfg, pcm)
             } catch (e: Exception) {

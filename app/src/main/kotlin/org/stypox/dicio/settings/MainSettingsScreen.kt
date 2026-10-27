@@ -82,8 +82,11 @@ private fun MainSettingsScreen(
     }
 
     LazyColumn(modifier) {
+        /* ETHEREAL (fork) */
+        etherealSettings()
+
         /* GENERAL SETTINGS */
-        item { SettingsCategoryTitle(stringResource(R.string.pref_general), topPadding = 4.dp) }
+        item { SettingsCategoryTitle(stringResource(R.string.pref_general)) }
         item {
             languageSetting().Render(
                 when (val language = settings.language) {
